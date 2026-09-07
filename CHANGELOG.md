@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ---
 
+## [2.4.2] - 2026-09-07
+
+### Fixed
+
+- **Bulk Update rejected comma-separated CSVs, and the error message pointed the wrong way.** Reported by Aritz Fernandez, who edits his export in Google Sheets. The export writes semicolons; Google Sheets always writes commas. His whole header therefore parsed as a single column named `ArticleID,Price_EUR,Amount`, and the message listed exactly that. Because `join(", ")` of a one-element list looks identical to three separated names, it read as if the header had parsed correctly and only the rows were broken.
+
+  The separator is now taken from the header row, counting semicolons against commas outside quotes. The header has no decimal commas to confuse the count, and a tie keeps the semicolon. The message now gives the number of columns and quotes each name, and says so plainly when only one column was found.
+
+- **Prices written with a decimal point were multiplied by one hundred.** This one was already in the field and had nothing to do with the separator. The point counted unconditionally as a thousands separator, so `0.02` was read as `2` and `12.50` as `1250`. Anyone editing the export in a spreadsheet set to English hit it. Only the max-change guard stood between that and a stock priced a hundred times too high, which is luck rather than a safeguard.
+
+  Both conventions are read now. With both separators present, the later one marks the decimals. With only one, it is a thousands separator when it occurs more than once or has exactly three digits after it, and a decimal separator otherwise. `1.234` still reads as 1234, and every German case is unchanged.
+
+  Checked against 27 cases covering both conventions, thousands groups, negative values, trailing currency text and empty input.
+
+---
+
 ## [2.4.1] - 2026-09-06
 
 ### Fixed

@@ -1694,6 +1694,17 @@ function parseCsv(text) {
   }
   if (!lines.length) return { headers: [], rows: [], meta };
 
+  const zaehle = (line, ch) => {
+    let n = 0, q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { if (q && line[i + 1] === '"') i++; else q = !q; }
+      else if (c === ch && !q) n++;
+    }
+    return n;
+  };
+  const SEP = zaehle(lines[0], ',') > zaehle(lines[0], ';') ? ',' : ';';
+
   const parseLine = (line) => {
     const out = [];
     let cur = '', inQ = false;
@@ -1705,7 +1716,7 @@ function parseCsv(text) {
         else cur += c;
       } else {
         if (c === '"') inQ = true;
-        else if (c === ';') { out.push(cur); cur = ''; }
+        else if (c === SEP) { out.push(cur); cur = ''; }
         else cur += c;
       }
     }
@@ -1749,7 +1760,24 @@ function parseFilenameMeta(filename) {
 }
 
 function parsePrice(s) {
-  return parseFloat(String(s || '').replace(/\./g, '').replace(',', '.')) || 0;
+  const t = String(s ?? '').trim().replace(/[^\d.,-]/g, '');
+  if (!t) return 0;
+  const iKomma = t.lastIndexOf(',');
+  const iPunkt = t.lastIndexOf('.');
+  let dez = -1;
+  if (iKomma >= 0 && iPunkt >= 0) {
+    dez = Math.max(iKomma, iPunkt);
+  } else if (iKomma >= 0 || iPunkt >= 0) {
+    const i = Math.max(iKomma, iPunkt);
+    const zeichen = i === iKomma ? ',' : '.';
+    const anzahl = t.split(zeichen).length - 1;
+    const danach = t.length - i - 1;
+    dez = (anzahl > 1 || danach === 3) ? -1 : i;
+  }
+  const ganz = (dez >= 0 ? t.slice(0, dez) : t).replace(/[.,]/g, '');
+  const bruch = dez >= 0 ? t.slice(dez + 1).replace(/[.,]/g, '') : '';
+  const n = parseFloat(ganz + (bruch ? '.' + bruch : ''));
+  return Number.isFinite(n) ? n : 0;
 }
 function parseFormPrice(s) {
   return parseFloat(String(s || '').replace(',', '.')) || 0;
@@ -1785,7 +1813,12 @@ btnAnalyze.addEventListener('click', async () => {
       return;
     }
     ulog(tl('Fehler: CSV muss ArticleID + Price_EUR Spalten enthalten. Bist du im richtigen Tab?', 'Error: CSV must contain ArticleID + Price_EUR columns. Are you on the right tab?'), 'err');
-    ulog(tl(`Gefundene Spalten: ${headers.join(', ')}`, `Columns found: ${headers.join(', ')}`), 'err');
+    const liste = headers.map(h => `"${h}"`).join(', ');
+    ulog(tl(`Gefundene Spalten (${headers.length}): ${liste}`, `Columns found (${headers.length}): ${liste}`), 'err');
+    if (headers.length === 1 && /[,;\t]/.test(headers[0])) {
+      ulog(tl('→ Es wurde nur EINE Spalte erkannt. Die Trennzeichen der Kopfzeile passen nicht — speichere die Datei mit Semikolon oder Komma als Trennzeichen.',
+              '→ Only ONE column was recognised. The header row uses a separator this file cannot be read with — save it with semicolons or commas as the separator.'), 'err');
+    }
     return;
   }
 
