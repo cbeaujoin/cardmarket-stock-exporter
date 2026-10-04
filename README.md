@@ -164,8 +164,9 @@ Export metadata (timestamp, locale, game, tool version) lives in the **filename*
 6. **Tip:** click the **📌 Pin** button top-right to detach the popup into its own window — it won't close when you accidentally click elsewhere
 7. Click **"Start full export"**
 8. Wait for the export to finish (progress bar shows live status)
-9. When finished, the CSV is downloaded to your Downloads folder:
-   `cardmarket-stock-YYYY-MM-DD.csv`
+9. When finished, Chrome opens a **Save As** dialog and you choose where the CSV goes. The suggested file name is:
+   `cardmarket-stock-{date}-{locale}-{game}-v{version}.csv`
+   A set export or a partial export appends a suffix to that name.
 
 ### What you will see during export
 
@@ -314,9 +315,10 @@ Before v2.4.3 an edit rewrote the whole want from the CSV row and could reset qu
 |-----------|-----|
 | `activeTab` | Access the current tab when you click the icon |
 | `tabs` | Find the Cardmarket tab when popup is pinned to a separate window |
-| `scripting` | Inject the scraping code into the Cardmarket tab |
-| `downloads` | Save the generated CSV to your Downloads folder |
-| `host_permissions: cardmarket.com` | Fetch additional pages during export |
+| `scripting` | Run the export, price-trend, update and want-list code in the Cardmarket tab |
+| `downloads` | Pass the generated CSV to Chrome, which opens a Save As dialog |
+| `storage` | Remember the UI language and cache price-trend values for 12 hours, locally in `chrome.storage.local` |
+| `host_permissions: cardmarket.com` | Load your stock, want-list and product pages on `www.cardmarket.com` and submit the changes you confirm |
 
 No access to any other website, no access to browsing history, no access to tabs outside cardmarket.com.
 
