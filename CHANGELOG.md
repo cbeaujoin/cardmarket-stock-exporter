@@ -6,6 +6,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ---
 
+## [2.4.3] - 2026-10-04
+
+### If you used want-list bulk edit before this version
+
+Wants you changed through a CSV may have lost their quantity (reset to 1), every language but one, their signed and altered setting, and their mail alert. The tool cannot reconstruct what was there. Wants you only exported or deleted are not affected. A fresh export with 2.4.3 shows the real state of every want, which is the quickest way to check.
+
+### Fixed
+
+- **The want-list export wrote `N` for every attribute, whatever the want said.** Reported by Alexander Storm in a Chrome Web Store review: wants that must be foil or signed came out as `IsFoil = N`, `IsSigned = N`.
+
+  A want-list attribute on Cardmarket has three states: must be, must not be, no preference. The list page shows them as `Y`, `N` and `Any`, one table column each. The export never read those columns. It searched the text of the row for words like "foil" or "signed", which the row does not contain, and wrote `N` when it found nothing. So `N` was wrong twice: for wants that require the attribute, and for the far more common "no preference", which is not the same as "must not be".
+
+  The export now reads the attribute columns themselves and writes `Y`, `N` or `Any`. Which column belongs to which field is taken from the page: the column titles are matched against the labels of Cardmarket's own bulk-edit form on the same page. The CSV therefore carries the attributes that game actually has (Magic: `IsFoil`, `IsSigned`, `IsAltered`) instead of a fixed set of five, two of which Magic does not know. A column the tool cannot match is reported in the log and left out, not guessed.
+
+- **`Quantity` was always `1`, and `Language` held one language at most.** The quantity was looked for in an input field the list page does not have, with `1` as the fallback. Of a want that accepts several languages only the first survived. Both are now read from their table cells. Several languages are written comma-separated; an empty cell means any language.
+
+- **Changing one field of a want through the CSV overwrote the others.** The edit request was assembled from the CSV row alone and sent every field, including the ones the export had read wrongly. Measured on a test want, with nothing but the price changed in the CSV:
+
+  | | Quantity | Languages | Foil | Signed | Mail alert |
+  |---|---|---|---|---|---|
+  | before | 3 | English, German | must be | must not be | on |
+  | after  | 1 | English | must be | no preference | off |
+
+  The request also used `1` and `0` where the form expects `Y`, `N` and `0`, never sent `isFoil` at all, filled `isFirstEd` from the `IsPlayset` column, and sent a single printing where a want can hold several.
+
+  Editing now works the way you would do it by hand. For each changed want the tool loads that want's edit form, takes every value as the server has it, replaces only the fields whose column differs from its `_Original` twin in your CSV, and submits the form. Printings, languages, attributes, quantity and mail alert you did not touch go back exactly as they came. The same test now leaves all five columns of the table above unchanged.
+
+- **"OK" only meant that the server had answered.** A request counted as done on HTTP 200, saved or not, and the log told you to go and check by hand. After saving, the tool now loads the form again and compares it with what it sent. An entry counts as OK only when they match; otherwise the log names the fields that did not take. Deletions are checked the same way: the entry has to be gone.
+
+- **The dry run did not look at the entries.** It requested the list page once per row and reported success if the page loaded. It now opens each want, resolves languages, condition and attributes against the real form, and reports wants that no longer exist, without sending anything.
+
+- **A run kept going into a Cloudflare block.** When Cardmarket starts throttling, the run now stops, says how many entries were left untouched, and counts nothing as done that it could not read back. The export does the same and names the lists it could not read, where it used to drop them without a word.
+
+- **Wants without a fixed expansion were exported without a name.** A want set to "any expansion" links to the card's overview page (`/Cards/…`), not to a product page, and the export only recognised product links. `ProductName` and `ProductUrl` stayed empty for what is probably the most common kind of want. If such a want was the only entry on its page, the row was not found as a table row at all and its attributes came out empty too. Rows are now anchored on their own table row, and the card link is taken from the name cell whatever it points to.
+
+- **A price that a spreadsheet had mangled was written as a price.** The max price was accepted as soon as the cell contained a digit. German Excel turns `2.5` into the date `02. Mai` and `1.99` into `Jan 99`; those went through as 2.00 and 99.00, were saved, read back and reported OK. A formula such as `=W2*0,9` yields three decimals, and `2,691` was read as two thousand six hundred ninety-one. The cell now has to be a plain number, with an optional € or EUR. Anything else is listed and skipped, and a single separator followed by exactly three digits is rejected as ambiguous instead of being guessed at.
+
+- **Every row of a want list whose name starts with `#` vanished on upload.** The CSV reader treated any line starting with `#` as a comment, and the list name is the first column. Comment lines are now only recognised above the header row.
+
+- **A CSV saved by Excel in its plain "CSV" format lost its umlauts.** Unlike "CSV UTF-8", that format is written in the Windows code page, so `Französisch` arrived broken and could not be matched to a language. The want-list upload now falls back to that code page when the file is not valid UTF-8.
+
+### Changed
+
+- Attribute cells take `Y`, `N` or `Any`. Also read: yes / no, ja / nein, true / false, wahr / falsch, and an empty cell for any. `Language` takes several names separated by commas. An empty max price, or `0`, removes the price.
+- A row with a value the tool cannot read (quantity `0`, an attribute like `maybe`, a price like `02. Mai`) is skipped and listed in the log. The want stays as it is.
+- The want-list run shows its progress and can be aborted. It makes three requests per changed want (read, save, read back) where it used to make one, so it takes correspondingly longer.
+- Error lines name the card, not its internal ID, and follow the UI language.
+- After a live run that sent anything, the loaded CSV is discarded. Its `_Original` columns no longer describe what is on Cardmarket, so the next round starts with a fresh export. If nothing was sent (logged out, wrong game in the tab), the CSV stays loaded and you can retry.
+- CSVs exported by 2.4.2 or older can still be uploaded. Only the cells you changed are written, so the wrong `N`s and `1`s in those files do no harm. The log points out that such a file predates the fix.
+- `delete` also accepts `J`, `JA`, `WAHR` and `X`.
+
+### Checked
+
+Live on Magic test lists: export of all three attribute states, quantity and two languages; a price-only edit that leaves everything else alone; clearing price and languages; deleting; a want without a fixed expansion; and the error cases unknown language, unknown condition, an attribute the game does not have, and a want that no longer exists.
+
+Offline: 62 CSV cases for the analysis step, 32 runs against a simulated server (saves the server ignores, vanished entries, a logged-out session, throttling mid-run, abort), 15 export cases on rebuilt list pages (single-row lists, wants without a product link, column titles that do not match their form labels, a throttled list), and 19 runs through the popup's three buttons, including the round trip of an untouched export, which has to come back as "nothing to do".
+
+Other games use the same pages. Their attribute columns are picked up from the page, not from a list in the code, but they were not part of the live check.
+
+---
+
 ## [2.4.2] - 2026-09-07
 
 ### Fixed

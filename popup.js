@@ -1680,7 +1680,7 @@ function parseCsv(text) {
   const lines = [];
   for (const l of allLines) {
     const stripped = l.replace(/^"+/, '').replace(/^=/, '').replace(/^"+/, '').trim();
-    if (l.startsWith('#') || stripped.startsWith('#') || stripped.startsWith('CMSE-META') || stripped.startsWith('CMSE-WANTS-META')) {
+    if (/^#?\s*CMSE(?:-WANTS)?-META/.test(stripped) || (!lines.length && (l.startsWith('#') || stripped.startsWith('#')))) {
       const metaMatch = stripped.match(/CMSE(?:-WANTS)?-META\s*\|\s*(.+?)(?:"|$)/);
       if (metaMatch) {
         for (const pair of metaMatch[1].split('|')) {
@@ -3245,6 +3245,11 @@ btnAbortWants.addEventListener('click', async () => {
       target: { tabId: tab.id },
       func: () => { window.__cmWantsStop = true; },
     });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      func: () => { window.__cmWantsStop = true; },
+    });
     wlog(tl('Abbruch angefordert', 'Abort requested'), 'err');
   } catch (e) { wlog(tl('Abort-Fehler: ', 'Abort error: ') + e.message, 'err'); }
 });
@@ -3319,25 +3324,47 @@ btnWantsExport.addEventListener('click', async () => {
     wlog(tl(`Wantlists gefunden: ${result.wantlists?.length || 0}`, `Wantlists found: ${result.wantlists?.length || 0}`), 'ok');
     wlog(tl(`Einträge gesamt: ${result.rows?.length || 0}`, `Entries total: ${result.rows?.length || 0}`), 'ok');
 
+    if (result.blocked) {
+      wlog(tl('⛔ Cardmarket hat die Anfragen gebremst. Der Export ist unvollständig. Seite im Tab neu laden, ein paar Minuten warten und erneut exportieren.',
+              '⛔ Cardmarket throttled the requests. The export is incomplete. Reload the page in the tab, wait a few minutes and export again.'), 'err');
+    }
+    if (result.failedLists && result.failedLists.length) {
+      wlog(tl(`⚠ Nicht (vollständig) gelesen und deshalb nicht oder nur teilweise in der CSV: ${result.failedLists.join(', ')}`,
+              `⚠ Not (fully) read and therefore missing or incomplete in the CSV: ${result.failedLists.join(', ')}`), 'err');
+    }
+
     if (!result.rows || result.rows.length === 0) {
       wlog(tl('Keine Einträge. Prüfe Login + dass mindestens eine Wantlist existiert.', 'No entries. Check login + that at least one wantlist exists.'), 'err');
       return;
     }
 
+    const flagNames = Array.isArray(result.ternary) ? result.ternary.filter(n => /^is[A-Z][A-Za-z]*$/.test(n)) : [];
+    const flagCol = n => n.charAt(0).toUpperCase() + n.slice(1);
+    if (flagNames.length) {
+      wlog(tl(`Attribut-Spalten: ${flagNames.map(flagCol).join(', ')} (Y = muss, N = darf nicht, Any = egal)`,
+              `Attribute columns: ${flagNames.map(flagCol).join(', ')} (Y = must be, N = must not be, Any = no preference)`), 'ok');
+    } else {
+      wlog(tl('⚠ Attribut-Spalten (Foil, Signiert, …) konnten auf der Seite nicht gefunden werden und fehlen in dieser CSV.',
+              '⚠ The attribute columns (foil, signed, …) could not be found on the page and are missing from this CSV.'), 'err');
+    }
+    if (result.ternaryUnmapped) {
+      wlog(tl(`⚠ ${result.ternaryUnmapped} Attribut-Spalte(n) der Seite konnten keinem Feld zugeordnet werden und fehlen in der CSV.`,
+              `⚠ ${result.ternaryUnmapped} attribute column(s) on the page could not be matched to a field and are missing from the CSV.`), 'err');
+    }
+    const noQty = result.rows.filter(r => !r.quantity).length;
+    if (noQty) {
+      wlog(tl(`⚠ Bei ${noQty} Eintrag/Einträgen war die Menge nicht lesbar; die Zelle bleibt leer.`,
+              `⚠ The quantity of ${noQty} entr(y/ies) could not be read; the cell stays empty.`), 'err');
+    }
     const cols = ['WantListName', 'idWantsList', 'idProduct', 'idMetacard', 'idWant', 'ProductName', 'Expansion', 'ExpansionCode',
       'Language', '_OriginalLanguage',
       'MinCondition', '_OriginalMinCondition',
-      'IsFoil', '_OriginalIsFoil',
-      'IsSigned', '_OriginalIsSigned',
-      'IsAltered', '_OriginalIsAltered',
-      'IsPlayset', '_OriginalIsPlayset',
-      'IsReverseHolo', '_OriginalIsReverseHolo',
+      ...flagNames.flatMap(n => [flagCol(n), '_Original' + flagCol(n)]),
       'MaxPrice_EUR', '_OriginalMaxPrice_EUR',
       'Quantity', '_OriginalQuantity',
       'ProductUrl', 'delete'];
     const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const escId = id => `"=""${String(id ?? '').replace(/"/g, '""')}"""`;
-    const yn = b => b ? 'Y' : 'N';
     const meta = {
       exportedAt: new Date().toISOString(),
       lang: langEl.value,
@@ -3348,13 +3375,8 @@ btnWantsExport.addEventListener('click', async () => {
     for (const r of result.rows) {
       const lang = r.language || '';
       const cond = r.minCondition || '';
-      const foil = yn(r.isFoil);
-      const signed = yn(r.isSigned);
-      const altered = yn(r.isAltered);
-      const playset = yn(r.isPlayset);
-      const reverse = yn(r.isReverseHolo);
       const price = r.maxPrice || '';
-      const qty = r.quantity || '1';
+      const qty = r.quantity || '';
       lines.push([
         esc(r.wantListName),
         escId(r.idWantsList),
@@ -3364,11 +3386,7 @@ btnWantsExport.addEventListener('click', async () => {
         esc(r.productName), esc(r.expansion), esc(r.expansionCode),
         esc(lang), esc(lang),
         esc(cond), esc(cond),
-        esc(foil), esc(foil),
-        esc(signed), esc(signed),
-        esc(altered), esc(altered),
-        esc(playset), esc(playset),
-        esc(reverse), esc(reverse),
+        ...flagNames.flatMap(n => { const v = (r.flags && r.flags[n]) || ''; return [esc(v), esc(v)]; }),
         esc(price), esc(price),
         esc(qty), esc(qty),
         esc(r.productUrl),
@@ -3413,6 +3431,56 @@ async function injectedWantsScrape({ delay }) {
       if (direct) return direct;
       return [...root.querySelectorAll('a[href*="/Products/"]')].find(isProductLink) || null;
     };
+    const findCardLink = (root) => findProductLink(root) || root.querySelector('td.name a[href]') || root.querySelector('a[href*="/Cards/"]');
+
+    const tipOf = (e) => (e.getAttribute('title') || e.getAttribute('data-bs-original-title') || e.getAttribute('aria-label') || e.getAttribute('data-original-title') || '').trim();
+    const TERNARY_WORDS = [
+      ['isReverseHolo', /revers/i],
+      ['isFirstEd', /first|1st|1\.\s|erstau|premi|primera|prima ed/i],
+      ['isFoil', /foil/i],
+      ['isSigned', /sign|firm|autogr|dédicac/i],
+      ['isAltered', /alt[eé]r|modifi/i],
+      ['isPlayset', /playset/i],
+    ];
+    const wantsTernaryFields = (doc, table) => {
+      if (!table) return [];
+      const heads = [...table.querySelectorAll('thead th')];
+      const cols = heads.map((th, i) => (/ternary/i.test(String(th.className || '')) ? i : -1)).filter(i => i >= 0);
+      if (!cols.length) return [];
+      const flat = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+      const titleOf = (i) => { const s = heads[i].querySelector('[title], [data-bs-original-title], [aria-label]'); return flat(s ? tipOf(s) : ''); };
+      const wordName = (i) => { const hit = TERNARY_WORDS.find(([, re]) => re.test(titleOf(i))); return hit ? hit[0] : ''; };
+      const form = [...doc.querySelectorAll('form')].find(f => /MassEditWants/i.test(f.getAttribute('action') || ''));
+      const selects = form
+        ? [...form.querySelectorAll('select')].filter(s => /^is[A-Z]/.test(s.getAttribute('name') || '') && s.querySelector('option[value="Y"]'))
+        : [];
+      const byLabel = {};
+      for (const s of selects) {
+        const id = s.getAttribute('id');
+        const lab = (id && form.querySelector(`label[for="${id}"]`)) || s.closest('label') || (s.parentElement && s.parentElement.querySelector('label'));
+        const t = flat(lab ? lab.textContent : '');
+        if (t && !(t in byLabel)) byLabel[t] = s.getAttribute('name');
+      }
+      const labelled = cols.map(col => ({ col, name: byLabel[titleOf(col)] || '' }));
+      if (labelled.every(x => x.name) && new Set(labelled.map(x => x.name)).size === labelled.length) return labelled;
+      if (selects.length === cols.length) {
+        const byOrder = cols.map((col, k) => ({ col, name: selects[k].getAttribute('name') }));
+        if (byOrder.every(x => { const w = wordName(x.col); return !w || w === x.name; })) return byOrder;
+      }
+      const seen = new Set();
+      return cols.map(col => ({ col, name: wordName(col) })).filter(x => x.name && !seen.has(x.name) && seen.add(x.name));
+    };
+    const ternaryOf = (td) => {
+      if (!td) return '';
+      if (td.querySelector('[name="yes"]')) return 'Y';
+      if (td.querySelector('[name="no"]')) return 'N';
+      const t = (td.textContent || '').trim().toUpperCase();
+      if (t === 'Y') return 'Y';
+      if (t === 'N') return 'N';
+      return t ? 'Any' : '';
+    };
+    const ternaryNames = [];
+    let ternaryUnmapped = 0;
 
     const wantsListName = (a, id) => {
       let n = a;
@@ -3458,6 +3526,8 @@ async function injectedWantsScrape({ delay }) {
 
     const allRows = [];
     const seenIdWants = new Set();
+    const failedLists = [];
+    let exportBlocked = false;
     const LANG_RE = /^(Deutsch|Englisch|Französisch|Italienisch|Spanisch|Portugiesisch|Japanisch|Koreanisch|Chinesisch|Russisch|S-Chinesisch|T-Chinesisch|Holländisch|Niederländisch|Polnisch|Tschechisch|Ungarisch|Indonesisch|Thailändisch|English|German|French|Italian|Spanish|Portuguese|Japanese|Korean|Chinese|Russian|Simplified Chinese|Traditional Chinese|Dutch|Polish|Czech|Hungarian|Indonesian|Thai)$/;
 
     for (let li = 0; li < wantlists.length; li++) {
@@ -3483,9 +3553,10 @@ async function injectedWantsScrape({ delay }) {
           catch (e) { console.log(`[CM-Wants] fetch err ${url}: ${e.message}`); continue; }
           console.log(`[CM-Wants] tried ${url} → status ${res.status}`);
           if (res.status === 429) { console.log('[CM-Wants] 429 → wait 10s'); await sleep(10000); res = null; continue; }
+          if (res.status === 403 || res.status === 503) { exportBlocked = true; res = null; break; }
           if (!res.ok) { res = null; continue; }
           const tmpHtml = await res.text();
-          const hasWantContent = /Wants-Optionen|wants-options|Karten<|Wants Hinzufügen|wantRow|article-row|productInfo|Shopping Wizard/i.test(tmpHtml);
+          const hasWantContent = /Wants-Optionen|wants-options|Karten<|Wants Hinzufügen|wantRow|article-row|productInfo|Shopping Wizard|checkWantsRow|WantsList_|\/AddCards/i.test(tmpHtml);
           console.log(`[CM-Wants] ${url} hasWantContent=${hasWantContent} html-len=${tmpHtml.length}`);
           if (!hasWantContent) continue;
           html = tmpHtml;
@@ -3494,6 +3565,7 @@ async function injectedWantsScrape({ delay }) {
         }
         if (!res || !html) {
           console.warn(`[CM-Wants] List ${wl.id}: NO valid URL found among candidates. Breaking.`);
+          failedLists.push(page === 1 ? wl.name : `${wl.name} (p. ${page}+)`);
           break;
         }
         if (page > 1 && html.length === lastHtmlLen) {
@@ -3510,8 +3582,9 @@ async function injectedWantsScrape({ delay }) {
         const rowSet = new Set();
         const rows = [];
         for (const cb of checkboxes) {
-          let container = cb.parentElement;
-          let best = null;
+          const ownRow = cb.closest('tr');
+          let best = ownRow && ownRow.querySelectorAll('input[data-id-want]').length === 1 ? ownRow : null;
+          let container = best ? null : cb.parentElement;
           let depth = 0;
           while (container && depth < 8) {
             if (container.querySelectorAll('input[data-id-want]').length > 1) break;
@@ -3565,6 +3638,14 @@ async function injectedWantsScrape({ delay }) {
           break;
         }
 
+        const pageTable = (rows[0]._cmCheckbox || rows[0]).closest('table');
+        const ternaryFields = wantsTernaryFields(doc, pageTable);
+        for (const tf of ternaryFields) if (!ternaryNames.includes(tf.name)) ternaryNames.push(tf.name);
+        if (pageTable) {
+          const ternaryCols = [...pageTable.querySelectorAll('thead th')].filter(th => /ternary/i.test(String(th.className || ''))).length;
+          if (ternaryCols > ternaryFields.length) ternaryUnmapped = Math.max(ternaryUnmapped, ternaryCols - ternaryFields.length);
+        }
+
         let pageHadRows = false;
         for (const el of rows) {
           const cb = el._cmCheckbox || el.querySelector('input[data-id-want]');
@@ -3574,8 +3655,8 @@ async function injectedWantsScrape({ delay }) {
             idWant = idWantMatch ? idWantMatch[1] : '';
           }
 
-          const nameLink = findProductLink(el);
-          const productName = (nameLink?.textContent || '').trim().replace(/\s+/g, ' ');
+          const nameLink = findCardLink(el);
+          const productName = (nameLink?.textContent || el.querySelector('td.name')?.textContent || '').trim().replace(/\s+/g, ' ');
           const href = nameLink?.getAttribute('href') || '';
           const productUrl = href ? (href.startsWith('http') ? href : 'https://www.cardmarket.com' + href) : '';
 
@@ -3585,7 +3666,7 @@ async function injectedWantsScrape({ delay }) {
             if (m) idProduct = m[1];
           }
           const fullHtml = el.outerHTML || '';
-          if (!idProduct) {
+          if (!idProduct && nameLink && isProductLink(nameLink)) {
             const mp = fullHtml.match(/product-images\.s3\.cardmarket\.com\/\d+\/[^/]+\/(\d+)\//i);
             if (mp) idProduct = mp[1];
           }
@@ -3605,7 +3686,12 @@ async function injectedWantsScrape({ delay }) {
           const expansionCode = ecMatch ? ecMatch[1] : '';
 
           let language = '';
-          el.querySelectorAll('span[aria-label], span[data-bs-original-title], span[data-original-title], span[title]').forEach(s => {
+          const langTd = el.querySelector('td.languages');
+          if (langTd) {
+            const names = [...langTd.querySelectorAll('[title], [data-bs-original-title], [aria-label], [data-original-title]')].map(tipOf).filter(Boolean);
+            language = [...new Set(names)].join(', ');
+          }
+          if (!langTd) el.querySelectorAll('span[aria-label], span[data-bs-original-title], span[data-original-title], span[title]').forEach(s => {
             if (language) return;
             const l = s.getAttribute('aria-label') || s.getAttribute('data-bs-original-title') || s.getAttribute('data-original-title') || s.getAttribute('title') || '';
             if (!window.__cmWantsLangNames) {
@@ -3629,27 +3715,28 @@ async function injectedWantsScrape({ delay }) {
             if (selCond) minCondition = selCond.textContent.trim();
           }
 
-          const txt = el.textContent || '';
-          const isFoil = !!el.querySelector('input[name*="oil"][checked], input[name*="oil"]:checked') || /\bFoil\b/i.test(txt);
-          const isSigned = !!el.querySelector('input[name*="igned"][checked], input[name*="igned"]:checked') || /\bSigned\b/i.test(txt);
-          const isAltered = !!el.querySelector('input[name*="ltered"][checked], input[name*="ltered"]:checked') || /\bAltered\b/i.test(txt);
-          const isPlayset = !!el.querySelector('input[name*="layset"][checked], input[name*="layset"]:checked') || /\bPlayset\b/i.test(txt);
-          const isReverseHolo = !!el.querySelector('[aria-label*="Reverse" i], [title*="Reverse" i]') || /Reverse\s*Holo/i.test(txt);
+          const cells = el.tagName === 'TR' ? [...el.children] : [];
+          const flags = {};
+          for (const tf of ternaryFields) flags[tf.name] = ternaryOf(cells[tf.col]);
 
           let maxPrice = '';
           const priceInput = el.querySelector('input[name*="rice"], input[name*="Price"]');
           if (priceInput) maxPrice = priceInput.value || priceInput.getAttribute('value') || '';
           if (!maxPrice) {
-            const priceEl = el.querySelector('.color-primary, [class*="rice"]');
+            const priceEl = el.querySelector('td.buyPrice') || el.querySelector('.color-primary, [class*="rice"]');
             const t = (priceEl?.textContent || '').trim();
             const pm = t.match(/(\d{1,3}(?:[.,]\d{3})*[,.]\d{2})/);
             if (pm) maxPrice = pm[1];
           }
 
           let quantity = '';
-          const qtyInput = el.querySelector('input[name*="mount"], input[name*="uantity"], input[type="number"]');
-          if (qtyInput) quantity = qtyInput.value || qtyInput.getAttribute('value') || '';
-          if (!quantity) quantity = '1';
+          const amountTd = el.querySelector('td.amount');
+          if (amountTd) quantity = (amountTd.getAttribute('data-amount') || amountTd.textContent || '').trim();
+          if (!/^\d+$/.test(quantity)) {
+            const qtyInput = el.querySelector('input[name*="mount"], input[name*="uantity"], input[type="number"]');
+            quantity = qtyInput ? (qtyInput.value || qtyInput.getAttribute('value') || '').trim() : '';
+          }
+          if (!/^\d+$/.test(quantity)) quantity = '';
 
           if (productName || idWant) {
             if (idWant && seenIdWants.has(idWant)) continue;
@@ -3665,7 +3752,7 @@ async function injectedWantsScrape({ delay }) {
               expansionCode,
               language,
               minCondition,
-              isFoil, isSigned, isAltered, isPlayset, isReverseHolo,
+              flags,
               maxPrice,
               quantity,
               productUrl,
@@ -3684,9 +3771,13 @@ async function injectedWantsScrape({ delay }) {
         page++;
         if (delay) await sleep(delay);
       }
+      if (exportBlocked) {
+        wantlists.slice(li + 1).forEach(w => failedLists.push(w.name));
+        break;
+      }
     }
 
-    return { wantlists, rows: allRows, aborted: !!window.__cmWantsStop };
+    return { wantlists, rows: allRows, ternary: ternaryNames, ternaryUnmapped, failedLists, blocked: exportBlocked, aborted: !!window.__cmWantsStop };
   } catch (e) {
     return { error: e.message, wantlists: [], rows: [] };
   }
@@ -3697,11 +3788,20 @@ btnWantsAnalyze.addEventListener('click', async () => {
   wantsLogEl.innerHTML = '';
   btnWantsDelete.style.display = 'none';
   parsedDeletes = [];
+  parsedWantsEdits = [];
 
   const file = fileWantsCsv.files[0];
   if (!file) { wlog(tl('Keine CSV ausgewählt', 'No CSV selected'), 'err'); return; }
 
-  const text = await file.text();
+  let text;
+  try {
+    const buf = await file.arrayBuffer();
+    text = new TextDecoder('utf-8').decode(buf);
+    if (text.includes(String.fromCharCode(0xFFFD))) text = new TextDecoder('windows-1252').decode(buf);
+  } catch (e) {
+    wlog(tl('Die Datei ließ sich nicht lesen. Wurde sie seit der Auswahl geändert? Bitte neu auswählen.', 'The file could not be read. Was it changed since you selected it? Please select it again.'), 'err');
+    return;
+  }
   const { headers, rows, meta: bodyMeta } = parseCsv(text);
   const fnameMeta = parseFilenameMeta(file.name);
   const meta = { ...bodyMeta, ...fnameMeta };
@@ -3727,7 +3827,24 @@ btnWantsAnalyze.addEventListener('click', async () => {
 
   const toDelete = [];
   const toEdit = [];
+  const badValues = [];
   let invalid = 0;
+  const flagHeaders = headers.filter(h => /^Is[A-Z][A-Za-z]*$/.test(h));
+  const editableFields = ['Language', 'MinCondition', ...flagHeaders, 'MaxPrice_EUR', 'Quantity'].filter(h => headers.includes(h));
+  const noTwin = editableFields.filter(h => !headers.includes('_Original' + h));
+  const triNorm = (s) => {
+    const t = String(s ?? '').trim().toLowerCase();
+    if (['y', 'yes', 'j', 'ja', 'true', 'wahr'].includes(t)) return 'Y';
+    if (['n', 'no', 'nein', 'false', 'falsch'].includes(t)) return 'N';
+    if (t === '' || t === 'any' || t === 'egal') return 'Any';
+    return null;
+  };
+  const csvVersion = String(meta.tool || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  const beforeFix = !!meta.tool && (((csvVersion[0] || 0) - 2) || ((csvVersion[1] || 0) - 4) || ((csvVersion[2] || 0) - 3)) < 0;
+  if (beforeFix) {
+    wlog(tl('ℹ Diese CSV stammt aus einer Version vor 2.4.3. Attribute, Menge und Sprache waren dort unzuverlässig (immer N, immer 1, nur eine Sprache). Geschrieben wird nur, was du geändert hast; für verlässliche Werte bitte neu exportieren.',
+            'ℹ This CSV comes from a version before 2.4.3. Attributes, quantity and language were unreliable there (always N, always 1, one language only). Only what you changed is written; re-export for reliable values.'), 'err');
+  }
   for (const r of rows) {
     const idWant = (r.idWant || '').trim();
     const idWantsList = (r.idWantsList || '').trim();
@@ -3735,7 +3852,7 @@ btnWantsAnalyze.addEventListener('click', async () => {
     if (!/^\d+$/.test(idWantsList)) { invalid++; continue; }
 
     const flag = (r.delete || '').trim().toUpperCase();
-    const wantsDelete = flag === 'Y' || flag === 'YES' || flag === 'TRUE' || flag === '1';
+    const wantsDelete = ['Y', 'YES', 'J', 'JA', 'TRUE', 'WAHR', 'X', '1'].includes(flag);
 
     if (wantsDelete) {
       toDelete.push({
@@ -3746,49 +3863,79 @@ btnWantsAnalyze.addEventListener('click', async () => {
       continue;
     }
 
-    const norm = (s) => (s || '').trim();
+    const norm = (s) => String(s ?? '').trim();
     const fieldDiffs = {};
+    const changes = { flags: {} };
+    const problems = [];
     let edited = false;
-    const editableFields = [
-      ['Language', '_OriginalLanguage'],
-      ['MinCondition', '_OriginalMinCondition'],
-      ['IsFoil', '_OriginalIsFoil'],
-      ['IsSigned', '_OriginalIsSigned'],
-      ['IsAltered', '_OriginalIsAltered'],
-      ['IsPlayset', '_OriginalIsPlayset'],
-      ['IsReverseHolo', '_OriginalIsReverseHolo'],
-      ['MaxPrice_EUR', '_OriginalMaxPrice_EUR'],
-      ['Quantity', '_OriginalQuantity'],
-    ];
-    for (const [field, refField] of editableFields) {
-      const newVal = norm(r[field]);
-      const refVal = norm(r[refField]);
-      if (refField in r && newVal !== refVal) {
-        fieldDiffs[field] = { old: refVal, new: newVal };
-        edited = true;
+    for (const field of editableFields) {
+      const refField = '_Original' + field;
+      if (!(field in r) || !(refField in r)) continue;
+      const newRaw = norm(r[field]);
+      const refRaw = norm(r[refField]);
+      if (field === 'Quantity') {
+        if (newRaw === refRaw) continue;
+        if (/^\d+$/.test(newRaw) && /^\d+$/.test(refRaw) && parseInt(newRaw, 10) === parseInt(refRaw, 10)) continue;
+        if (!/^[1-9]\d{0,3}$/.test(newRaw)) { problems.push(`Quantity "${newRaw}"`); continue; }
+        changes.quantity = String(parseInt(newRaw, 10));
+      } else if (field === 'MaxPrice_EUR') {
+        const priceOf = (s) => (s === '' ? null : (parsePrice(s) || null));
+        const core = newRaw.replace(/^(?:€|EUR)\s*/i, '').replace(/\s*(?:€|EUR)$/i, '');
+        if (newRaw !== '' && !/^\d[\d.,]*$/.test(core)) { problems.push(`MaxPrice_EUR "${newRaw}"`); continue; }
+        if (/^\d{1,3}[.,]\d{3}$/.test(core)) {
+          problems.push(tl(`MaxPrice_EUR "${newRaw}" ist mehrdeutig (Tausender oder drei Nachkommastellen?), bitte mit zwei Nachkommastellen schreiben`, `MaxPrice_EUR "${newRaw}" is ambiguous (thousands or three decimals?), please write two decimals`));
+          continue;
+        }
+        const a = priceOf(newRaw);
+        const b = priceOf(refRaw);
+        if (a === b || (a !== null && b !== null && Math.abs(a - b) < 0.005)) continue;
+        if (a !== null && (a < 0 || a > 100000)) { problems.push(`MaxPrice_EUR "${newRaw}"`); continue; }
+        changes.maxPrice = a === null ? '' : a.toFixed(2);
+      } else if (field === 'Language') {
+        const list = (s) => s.split(/[,;/|+]/).map(x => x.trim()).filter(x => x && !/^(any|egal)$/i.test(x));
+        const key = (s) => list(s).map(x => x.toLowerCase()).sort().join('|');
+        if (key(newRaw) === key(refRaw)) continue;
+        changes.languages = list(newRaw);
+      } else if (field === 'MinCondition') {
+        if (newRaw.toLowerCase() === refRaw.toLowerCase()) continue;
+        changes.minCondition = newRaw;
+      } else {
+        const a = triNorm(newRaw);
+        const b = triNorm(refRaw);
+        if (a === null) { problems.push(`${field} "${newRaw}"`); continue; }
+        if (a === b) continue;
+        changes.flags[field.charAt(0).toLowerCase() + field.slice(1)] = a;
       }
+      fieldDiffs[field] = { old: refRaw, new: newRaw };
+      edited = true;
+    }
+    if (problems.length) {
+      badValues.push({ idWant, name: r.ProductName || '', what: problems.join(', ') });
+      continue;
     }
     if (edited) {
       toEdit.push({
         idWant, idWantsList,
-        idProduct: (r.idProduct || '').trim(),
-        idMetacard: (r.idMetacard || '').trim(),
         productName: r.ProductName || '',
         wantListName: r.WantListName || '',
         fieldDiffs,
-        newValues: {
-          language: norm(r.Language),
-          minCondition: norm(r.MinCondition),
-          isFoil: norm(r.IsFoil),
-          isSigned: norm(r.IsSigned),
-          isAltered: norm(r.IsAltered),
-          isPlayset: norm(r.IsPlayset),
-          isReverseHolo: norm(r.IsReverseHolo),
-          maxPrice: norm(r.MaxPrice_EUR),
-          quantity: norm(r.Quantity),
-        },
+        changes,
       });
     }
+  }
+  const deleteIds = new Set(toDelete.map(d => d.idWant));
+  const both = toEdit.filter(e => deleteIds.has(e.idWant)).length;
+  if (both) {
+    for (let i = toEdit.length - 1; i >= 0; i--) if (deleteIds.has(toEdit[i].idWant)) toEdit.splice(i, 1);
+    wlog(tl(`ℹ ${both} Eintrag/Einträge sind zum Löschen UND Bearbeiten markiert — Löschen gewinnt.`, `ℹ ${both} entr(y/ies) are marked for both delete AND edit — delete wins.`));
+  }
+  if (badValues.length) {
+    wlog(tl(`⚠ ${badValues.length} Zeile(n) mit unlesbaren Werten übersprungen — diese Einträge bleiben unverändert:`, `⚠ ${badValues.length} row(s) with unreadable values skipped — these entries stay unchanged:`), 'err');
+    badValues.slice(0, 10).forEach(b => wlog(`  ${String(b.name).slice(0, 30)}: ${b.what}`, 'err'));
+    wlog(tl('  Erlaubt: Attribute Y / N / Any, Menge als ganze Zahl ab 1, Preis als Zahl.', '  Allowed: attributes Y / N / Any, quantity as a whole number from 1, price as a number.'), 'err');
+  }
+  if (noTwin.length) {
+    wlog(tl(`ℹ Ohne _Original-Zwilling werden Änderungen nicht erkannt: ${noTwin.join(', ')}`, `ℹ Changes are not detected for columns without an _Original twin: ${noTwin.join(', ')}`));
   }
 
   if (invalid > 0) wlog(tl(`⚠ ${invalid} Zeilen mit invaliden IDs übersprungen`, `⚠ ${invalid} rows with invalid IDs skipped`), 'err');
@@ -3819,7 +3966,10 @@ btnWantsDelete.addEventListener('click', async () => {
   const isDry = wantsDryRunEl.checked;
 
   if (!isDry) {
-    const ok = window.confirm(`⚠ ACHTUNG: ${parsedDeletes.length} Wants gelöscht + ${parsedWantsEdits.length} Wants editiert LIVE.\n\nDelete NICHT rückgängig machbar.\n\nFortfahren?`);
+    const ok = window.confirm(tl(
+      `⚠ ACHTUNG: ${parsedDeletes.length} Wants werden gelöscht und ${parsedWantsEdits.length} Wants geändert, LIVE.\n\nLöschen ist NICHT rückgängig zu machen.\n\nFortfahren?`,
+      `⚠ WARNING: ${parsedDeletes.length} wants will be deleted and ${parsedWantsEdits.length} wants changed, LIVE.\n\nDeleting can NOT be undone.\n\nContinue?`
+    ));
     if (!ok) return;
   }
 
@@ -3829,15 +3979,45 @@ btnWantsDelete.addEventListener('click', async () => {
   const actionDesc = `${parsedWantsEdits.length} edit + ${parsedDeletes.length} delete`;
   wlog(`Start ${isDry ? 'DRY-RUN' : 'LIVE'} (${actionDesc})...`, 'ok');
 
-  const tab = await getTargetTab();
+  const nameOf = {};
+  [...parsedWantsEdits, ...parsedDeletes].forEach(x => { nameOf[x.idWant] = x.productName; });
+  let pollTimer = null;
 
   try {
+    const tab = await getTargetTab();
+    if (!tab) {
+      wlog(tl('Kein Cardmarket-Tab gefunden. Bitte cardmarket.com in einem Tab öffnen und einloggen.', 'No Cardmarket tab found. Please open cardmarket.com in a tab and log in.'), 'err');
+      return;
+    }
+    btnAbortWants.style.display = 'block';
+    wantsProgFillEl.style.width = '0%';
+    wantsProgTextEl.textContent = '…';
+    pollTimer = setInterval(async () => {
+      try {
+        const [{ result: p }] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: 'MAIN',
+          func: () => window.__cmWantsProgress || null,
+        });
+        if (!p || !p.total || !('done' in p)) return;
+        wantsProgFillEl.style.width = Math.round((p.done / p.total) * 100) + '%';
+        wantsProgTextEl.textContent = tl(
+          `${isDry ? 'Dry-Run' : 'Live'}: ${p.done}/${p.total} | OK ${p.ok || 0} | Fehler ${p.err || 0}`,
+          `${isDry ? 'Dry run' : 'Live'}: ${p.done}/${p.total} | OK ${p.ok || 0} | errors ${p.err || 0}`
+        );
+      } catch {}
+    }, 800);
+
+    const isEn = tl('de', 'en') === 'en';
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
-      args: [{ deletes: parsedDeletes, edits: parsedWantsEdits, dryRun: isDry, delay: 500 }],
+      args: [{ deletes: parsedDeletes, edits: parsedWantsEdits, dryRun: isDry, delay: 700, en: isEn }],
       func: runWantsBulkDelete,
     });
+    clearInterval(pollTimer);
+    pollTimer = null;
+    wantsProgFillEl.style.width = '100%';
 
     if (!result) {
       wlog(tl('Kein Result. Tab evtl. navigiert weg.', 'No result. The tab may have navigated away.'), 'err');
@@ -3848,20 +4028,50 @@ btnWantsDelete.addEventListener('click', async () => {
     if (wantsUnresolved.length) {
       const names = [...new Set(wantsUnresolved.map(x => x.name))].slice(0, 5).join(', ');
       wlog(tl(
-        `⚠ ${wantsUnresolved.length} Eintrag/Einträge übersprungen — Sprache nicht bestimmbar (${names}). Diese Einträge wurden gar nicht verändert; bitte Wantlist neu exportieren.`,
-        `⚠ ${wantsUnresolved.length} entr(y/ies) skipped — language could not be determined (${names}). These entries were left untouched; please re-export your wantlist.`
+        `⚠ ${wantsUnresolved.length} Eintrag/Einträge übersprungen — Sprache nicht erkannt (${names}). Diese Einträge wurden nicht verändert. Bitte die Sprache so schreiben, wie sie im Export steht.`,
+        `⚠ ${wantsUnresolved.length} entr(y/ies) skipped — language not recognised (${names}). These entries were left untouched. Please spell the language the way the export does.`
       ), 'err');
     }
-    if (!isDry && (result.ok > 0)) {
-      wlog(tl(`⚠ "OK" heißt nur HTTP 200 — verifiziere durch refresh der Wants-Page ob Änderungen wirklich übernommen wurden!`, `⚠ "OK" only means HTTP 200 — verify by refreshing the Wants page whether the changes were actually applied!`), 'err');
-      wlog(tl(`Falls Werte unverändert: Endpoint ist falsch. DevTools-Network-Trace bei manueller Edit-Aktion senden für exakten Endpoint.`, `If values are unchanged: the endpoint is wrong. Send a DevTools network trace of a manual edit action for the exact endpoint.`), 'err');
+    const sentAny = !isDry && (result.sent || 0) > 0;
+    const stopped = !!(result.blocked || result.aborted);
+    const checked = Math.max(0, (result.total || 0) - (result.skipped || 0));
+    if (result.aborted) {
+      wlog(tl(`Abgebrochen. ${result.skipped || 0} Einträge sind unberührt.`, `Aborted. ${result.skipped || 0} entries are untouched.`), 'err');
+    }
+    if (result.blocked) {
+      wlog(tl(
+        `⛔ Cardmarket hat die Anfragen gebremst. Der Lauf wurde angehalten, ${result.skipped || 0} Einträge sind unberührt. Seite im Tab neu laden und ein paar Minuten warten.`,
+        `⛔ Cardmarket throttled the requests. The run was stopped, ${result.skipped || 0} entries are untouched. Reload the page in the tab and wait a few minutes.`
+      ), 'err');
+    }
+    if (isDry) {
+      wlog(stopped
+        ? tl(`Dry-Run: ${checked} von ${result.total || 0} Einträgen wurden auf Cardmarket nachgeschlagen, der Rest nicht. Gesendet wurde nichts.`, `Dry run: ${checked} of ${result.total || 0} entries were looked up on Cardmarket, the rest were not. Nothing was sent.`)
+        : tl('Dry-Run: Jeder Eintrag wurde auf Cardmarket nachgeschlagen und geprüft, gesendet wurde nichts.', 'Dry run: every entry was looked up on Cardmarket and checked, nothing was sent.'));
+    } else if (result.ok > 0) {
+      wlog(tl('Alles, was als OK gezählt ist, wurde danach auf Cardmarket nachgeprüft: Änderungen stimmen, gelöschte Einträge sind weg.', 'Everything counted as OK was checked on Cardmarket afterwards: changes match, deleted entries are gone.'), 'ok');
+    }
+    if (sentAny) {
+      wlog(tl('Für weitere Änderungen bitte neu exportieren, die geladene CSV passt nicht mehr zum Stand auf Cardmarket.', 'For further changes please export again, the loaded CSV no longer matches what is on Cardmarket.'));
+    } else if (!isDry && (result.err || 0) > 0) {
+      wlog(tl('Es wurde nichts an Cardmarket gesendet. Die CSV bleibt geladen, du kannst es nach dem Beheben der Ursache direkt noch einmal versuchen.', 'Nothing was sent to Cardmarket. The CSV stays loaded, so you can try again once the cause is fixed.'));
+    } else if (!isDry && !stopped) {
+      wlog(tl('Es musste nichts gesendet werden: Die Einträge waren auf Cardmarket bereits gelöscht.', 'Nothing had to be sent: the entries were already gone on Cardmarket.'));
     }
     if (result.errors?.length) {
-      result.errors.slice(0, 20).forEach(e => wlog(`  ${e.idWant}: ${e.msg}`, 'err'));
+      result.errors.slice(0, 20).forEach(e => wlog(`  ${String(nameOf[e.idWant] || e.idWant).slice(0, 40)}: ${e.msg}`, 'err'));
+      if (result.errors.length > 20) wlog(tl(`  … und ${result.errors.length - 20} weitere`, `  … and ${result.errors.length - 20} more`), 'err');
+    }
+    if (sentAny || (!isDry && !stopped && !result.err)) {
+      parsedDeletes = [];
+      parsedWantsEdits = [];
+      btnWantsDelete.style.display = 'none';
     }
   } catch (e) {
     wlog('Exception: ' + e.message, 'err');
   } finally {
+    if (pollTimer) clearInterval(pollTimer);
+    btnAbortWants.style.display = 'none';
     btnWantsDelete.disabled = false;
     btnWantsAnalyze.disabled = false;
   }
@@ -3869,148 +4079,236 @@ btnWantsDelete.addEventListener('click', async () => {
 
 async function runWantsBulkDelete(args) {
   try {
-    const { deletes, edits, dryRun, delay } = args || {};
+    const { deletes, edits, dryRun, delay, en } = args || {};
     const deletesArr = Array.isArray(deletes) ? deletes : [];
     const editsArr = Array.isArray(edits) ? edits : [];
+    const L = (de, english) => (en ? english : de);
     let ok = 0, err = 0;
     const errors = [];
     const langUnresolved = [];
-    const wantsPageLangNameToId = (() => {
-      const map = {};
-      try {
-        document.querySelectorAll('select[name="idLanguage"] option, select[name="idLanguage[]"] option').forEach(o => {
-          const val = (o.value || '').trim();
-          const nm = (o.textContent || '').trim();
-          if (val && /^\d+$/.test(val) && val !== '0' && nm) map[nm] = val;
-        });
-      } catch (e) {  }
-      return map;
-    })();
     const pathParts = location.pathname.split('/').filter(Boolean);
     const lang = pathParts[0] || 'de';
     const game = pathParts[1] || 'Pokemon';
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const total = deletesArr.length + editsArr.length;
+    window.__cmWantsStop = false;
 
-    const cmtkn = document.querySelector('input[name="__cmtkn"]')?.value || '';
-    if (!cmtkn) {
-      console.warn('[CM-Wants] Kein __cmtkn gefunden auf aktueller Page — Edits/Deletes werden vermutlich fehlschlagen. Lade eine Cardmarket-Page mit Form (z.B. Wants-page) bevor du den Bulk-Run startest.');
-    } else {
-      console.log('[CM-Wants] __cmtkn extrahiert, length=', cmtkn.length);
-    }
+    const LANG_NAME_TO_ID = {
+      'Englisch': '1', 'English': '1',
+      'Französisch': '2', 'French': '2',
+      'Deutsch': '3', 'German': '3',
+      'Spanisch': '4', 'Spanish': '4',
+      'Italienisch': '5', 'Italian': '5',
+      'S-Chinesisch': '6', 'Chinese': '6', 'Chinesisch': '6', 'Simplified Chinese': '6',
+      'Japanisch': '7', 'Japanese': '7',
+      'Portugiesisch': '8', 'Portuguese': '8',
+      'Russisch': '9', 'Russian': '9',
+      'Koreanisch': '10', 'Korean': '10',
+      'T-Chinesisch': '11', 'Traditional Chinese': '11',
+      'Holländisch': '12', 'Niederländisch': '12', 'Dutch': '12',
+      'Polnisch': '13', 'Polish': '13',
+      'Tschechisch': '14', 'Czech': '14',
+      'Ungarisch': '15', 'Hungarian': '15',
+      'Indonesisch': '16', 'Indonesian': '16',
+      'Thailändisch': '17', 'Thai': '17',
+    };
+    const COND_NAME_TO_ID = {
+      'MT': '1', 'NM': '2', 'EX': '3', 'GD': '4', 'LP': '5', 'PL': '6', 'PO': '7',
+      'Mint': '1', 'Near Mint': '2', 'Excellent': '3', 'Good': '4',
+      'Light Played': '5', 'Played': '6', 'Poor': '7',
+    };
+    const lower = (x) => String(x == null ? '' : x).trim().toLowerCase();
+    const isChallenge = (res, html) => res.status === 403 || res.status === 429 || res.status === 503
+      || /Just a moment|cf-chl-|cf-mitigated|Checking your browser/i.test(String(html || '').slice(0, 4000));
+    const blockedError = (res) => { const ex = new Error(L(`Cardmarket bremst (HTTP ${res.status})`, `Cardmarket is throttling (HTTP ${res.status})`)); ex.blocked = true; return ex; };
+    const getDoc = async (path, what) => {
+      const res = await fetch(path, { credentials: 'include' });
+      const html = await res.text();
+      if (isChallenge(res, html)) throw blockedError(res);
+      if (!res.ok) throw new Error(`${what} HTTP ${res.status}`);
+      return new DOMParser().parseFromString(html, 'text/html');
+    };
+    const post = async (action, body) => {
+      const res = await fetch(action, { method: 'POST', credentials: 'include', body, redirect: 'manual' });
+      if (res.type === 'opaqueredirect') return;
+      const html = await res.text();
+      if (isChallenge(res, html)) throw blockedError(res);
+      if (!res.ok) throw new Error(`${L('Speichern', 'Save')} HTTP ${res.status}`);
+    };
+    const NOT_FOUND = L('nicht gefunden (ausgeloggt, oder der Tab zeigt ein anderes Spiel als die CSV)', 'not found (logged out, or the tab shows a different game than the CSV)');
+    const GONE = L('Eintrag existiert nicht mehr', 'entry no longer exists');
+    const findEditForm = (doc, e) => {
+      const form = [...doc.querySelectorAll('form')].find(f => /WantsList_EditWant/i.test(f.getAttribute('action') || ''));
+      if (!form) return null;
+      const idField = form.querySelector('input[name="_id"]');
+      if (!idField || idField.getAttribute('value') !== e.idWant) throw new Error(L('Formular gehört zu einem anderen Eintrag', 'the form belongs to a different entry'));
+      return form;
+    };
+    const seesList = (doc, idWantsList) => [...doc.querySelectorAll('a[href]')].some(a => new RegExp(`/Wants/${idWantsList}(?![0-9])`).test(a.getAttribute('href') || ''))
+      || [...doc.querySelectorAll('input[name="idWantsList"]')].some(i => i.getAttribute('value') === String(idWantsList));
+    const loadEditForm = async (e) => {
+      const doc = await getDoc(`/${lang}/${game}/Wants/${e.idWantsList}/${e.idWant}`, L('Bearbeiten-Seite', 'Edit page'));
+      const form = findEditForm(doc, e);
+      if (form) return form;
+      if (seesList(doc, e.idWantsList)) throw new Error(GONE);
+      throw new Error(`${L('Eintrag', 'entry')} ${NOT_FOUND}`);
+    };
+    const wantGone = async (d) => {
+      const doc = await getDoc(`/${lang}/${game}/Wants/${d.idWantsList}/${d.idWant}`, L('Prüfung', 'Check'));
+      if (findEditForm(doc, d)) return false;
+      if (seesList(doc, d.idWantsList)) return true;
+      throw new Error(`${L('Eintrag', 'entry')} ${NOT_FOUND}`);
+    };
+    const listTokens = {};
+    const deleteTarget = async (idWantsList) => {
+      if (listTokens[idWantsList]) return listTokens[idWantsList];
+      const doc = await getDoc(`/${lang}/${game}/Wants/${idWantsList}`, L('Wunschliste', 'Want list'));
+      const form = [...doc.querySelectorAll('form')].find(f => /WantsList_DeleteWant/i.test(f.getAttribute('action') || ''));
+      const tokenField = form && form.querySelector('input[name="__cmtkn"]');
+      const token = tokenField ? (tokenField.getAttribute('value') || '') : '';
+      if (!token) throw new Error(`${L('Wunschliste', 'want list')} ${NOT_FOUND}`);
+      listTokens[idWantsList] = { token, action: form.getAttribute('action') };
+      return listTokens[idWantsList];
+    };
+    const optionId = (select, raw, table) => {
+      const want = lower(raw);
+      for (const o of select.querySelectorAll('option')) {
+        if (lower(o.textContent) === want && (o.getAttribute('value') || '') !== '') return o.getAttribute('value');
+      }
+      const viaTable = Object.keys(table).find(k => lower(k) === want);
+      if (viaTable && [...select.querySelectorAll('option')].some(o => o.getAttribute('value') === table[viaTable])) return table[viaTable];
+      const digits = String(raw).trim();
+      if (/^\d+$/.test(digits) && [...select.querySelectorAll('option')].some(o => o.getAttribute('value') === digits)) return digits;
+      return '';
+    };
+    const missing = (name) => new Error(L(`Feld "${name}" fehlt im Formular`, `field "${name}" is missing from the form`));
+    const applyChanges = (form, e) => {
+      const c = e.changes || {};
+      const p = new URLSearchParams(new FormData(form));
+      const expect = {};
+      if (c.quantity != null) {
+        if (!form.querySelector('[name="amount"]')) throw missing('amount');
+        p.set('amount', c.quantity); expect.amount = c.quantity;
+      }
+      if (c.maxPrice != null) {
+        if (!form.querySelector('[name="wishPrice"]')) throw missing('wishPrice');
+        p.set('wishPrice', c.maxPrice); expect.wishPrice = c.maxPrice;
+      }
+      if (c.minCondition != null) {
+        const sel = form.querySelector('select[name="minCondition"]');
+        if (!sel) throw missing('minCondition');
+        const raw = String(c.minCondition).trim();
+        let id = '';
+        if (raw && !/^(any|egal)$/i.test(raw)) {
+          id = optionId(sel, raw, COND_NAME_TO_ID);
+          if (!id) throw new Error(L(`Zustand nicht erkannt ("${raw}")`, `condition not recognised ("${raw}")`));
+        }
+        p.set('minCondition', id); expect.minCondition = id;
+      }
+      if (c.languages != null) {
+        const sel = form.querySelector('select[name="idLanguage[]"]');
+        if (!sel) throw missing('idLanguage[]');
+        const ids = [];
+        for (const name of c.languages) {
+          if (/^(any|egal)$/i.test(String(name).trim())) continue;
+          const id = optionId(sel, name, LANG_NAME_TO_ID);
+          if (!id) { langUnresolved.push({ id: e.idWant, name }); throw new Error(L(`Sprache nicht erkannt ("${name}")`, `language not recognised ("${name}")`)); }
+          if (!ids.includes(id)) ids.push(id);
+        }
+        p.delete('idLanguage[]');
+        ids.forEach(id => p.append('idLanguage[]', id));
+        expect.languages = ids.slice().sort().join(',');
+      }
+      for (const [name, val] of Object.entries(c.flags || {})) {
+        const sel = /^is[A-Z][A-Za-z]*$/.test(name) ? form.querySelector(`select[name="${name}"]`) : null;
+        if (!sel || ![...sel.querySelectorAll('option')].some(o => o.getAttribute('value') === 'Y')) throw new Error(L(`Attribut ${name} gibt es bei diesem Spiel nicht`, `this game has no attribute ${name}`));
+        const v = val === 'Y' ? 'Y' : (val === 'N' ? 'N' : '0');
+        p.set(name, v); expect[name] = v;
+      }
+      return { p, expect };
+    };
+    const readBack = (form) => {
+      const p = new URLSearchParams(new FormData(form));
+      const got = {};
+      for (const [k, v] of p.entries()) if (k !== 'idLanguage[]' && k !== 'idProduct[]') got[k] = v;
+      got.languages = p.getAll('idLanguage[]').slice().sort().join(',');
+      return got;
+    };
+    const mismatch = (expect, got) => Object.keys(expect).filter(k => {
+      const a = String(expect[k] == null ? '' : expect[k]);
+      const b = String(got[k] == null ? '' : got[k]);
+      if (k === 'wishPrice') {
+        const na = a === '' ? 0 : parseFloat(a);
+        const nb = b === '' ? 0 : parseFloat(b.replace(',', '.'));
+        return !(Math.abs(na - nb) < 0.005);
+      }
+      if (k === 'amount') return parseInt(a, 10) !== parseInt(b, 10);
+      if (/^is[A-Z]/.test(k)) return (a || '0') !== (b || '0');
+      return a !== b;
+    });
 
+    let editsOk = 0, editsTried = 0, blocked = false, aborted = false, sent = 0;
     for (let i = 0; i < editsArr.length; i++) {
+      if (window.__cmWantsStop) { aborted = true; break; }
       const e = editsArr[i];
+      editsTried++;
       window.__cmWantsProgress = { phase: dryRun ? 'dry-edit' : 'editing', done: i, total, ok, err, currentId: e.idWant };
       try {
-        if (dryRun) {
-          const probe = await fetch(`/${lang}/${game}/Wants/${e.idWantsList}`, { credentials: 'include' });
-          if (!probe.ok) throw new Error(`wantlist HTTP ${probe.status}`);
-          ok++;
-        } else {
-          const LANG_NAME_TO_ID = {
-            'Englisch': '1', 'English': '1',
-            'Französisch': '2', 'French': '2',
-            'Deutsch': '3', 'German': '3',
-            'Spanisch': '4', 'Spanish': '4',
-            'Italienisch': '5', 'Italian': '5',
-            'S-Chinesisch': '6', 'Chinese': '6', 'Chinesisch': '6', 'Simplified Chinese': '6',
-            'Japanisch': '7', 'Japanese': '7',
-            'Portugiesisch': '8', 'Portuguese': '8',
-            'Russisch': '9', 'Russian': '9',
-            'Koreanisch': '10', 'Korean': '10',
-            'T-Chinesisch': '11', 'Traditional Chinese': '11',
-            'Holländisch': '12', 'Niederländisch': '12', 'Dutch': '12',
-            'Polnisch': '13', 'Polish': '13',
-            'Tschechisch': '14', 'Czech': '14',
-            'Ungarisch': '15', 'Hungarian': '15',
-            'Indonesisch': '16', 'Indonesian': '16',
-            'Thailändisch': '17', 'Thai': '17',
-          };
-          const COND_NAME_TO_ID = {
-            'MT': '1', 'NM': '2', 'EX': '3', 'GD': '4', 'LP': '5', 'PL': '6', 'PO': '7',
-            'Mint': '1', 'Near Mint': '2', 'Excellent': '3', 'Good': '4',
-            'Light Played': '5', 'Played': '6', 'Poor': '7',
-          };
-          const fd = new FormData();
-          if (cmtkn) fd.append('__cmtkn', cmtkn);
-          fd.append('_id', e.idWant);
-          fd.append('idWantsList', e.idWantsList);
-          if (e.idMetacard) fd.append('idMetacard', e.idMetacard);
-          if (e.idProduct) fd.append('idProduct[]', e.idProduct);
-          fd.append('idProductEmptyInput', '');
-          const v = e.newValues || {};
-          const rawL = String(v.language ?? '').trim();
-          if (rawL) {
-            const langId = wantsPageLangNameToId[rawL] || LANG_NAME_TO_ID[rawL] || (/^\d+$/.test(rawL) ? rawL : '');
-            if (!langId) {
-              langUnresolved.push({ id: e.idWant, name: rawL });
-              throw new Error(`Sprache nicht aufloesbar ("${rawL}") — Eintrag unveraendert gelassen`);
-            }
-            fd.append('idLanguage[]', langId);
-          }
-          fd.append('idLanguageEmptyInput', '');
-          if (v.minCondition) {
-            const rawC = String(v.minCondition).trim();
-            const condId = COND_NAME_TO_ID[rawC] || (/^[1-7]$/.test(rawC) ? rawC : '');
-            if (!condId) throw new Error(`Zustand nicht aufloesbar ("${rawC}") — Eintrag unveraendert gelassen`);
-            fd.append('minCondition', condId);
-          }
-          if (v.quantity) fd.append('amount', v.quantity);
-          if (v.maxPrice) fd.append('wishPrice', v.maxPrice.replace(',', '.'));
-          fd.append('isReverseHolo', v.isReverseHolo === 'Y' ? '1' : '0');
-          fd.append('isSigned', v.isSigned === 'Y' ? '1' : '0');
-          fd.append('isAltered', v.isAltered === 'Y' ? '1' : '0');
-          fd.append('isFirstEd', v.isPlayset === 'Y' ? '1' : '0');
-          const editUrl = `/${lang}/${game}/PostGetAction/WantsList_EditWant`;
-          const res = await fetch(editUrl, {
-            method: 'POST',
-            credentials: 'include',
-            body: fd,
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            redirect: 'follow',
-          });
-          if (!res.ok && res.status !== 302) throw new Error(`edit HTTP ${res.status} @ ${editUrl}`);
-          ok++;
+        const form = await loadEditForm(e);
+        const { p, expect } = applyChanges(form, e);
+        if (!Object.keys(expect).length) throw new Error(L('keine Änderung erkannt', 'no change detected'));
+        if (!dryRun) {
+          if (delay) await sleep(delay);
+          sent++;
+          await post(form.getAttribute('action'), p);
+          if (delay) await sleep(delay);
+          const bad = mismatch(expect, readBack(await loadEditForm(e)));
+          if (bad.length) throw new Error(`${L('nicht übernommen', 'not applied')}: ${bad.join(', ')}`);
         }
+        ok++; editsOk++;
       } catch (ex) {
         err++;
         errors.push({ idWant: e.idWant, msg: 'edit: ' + ex.message });
+        if (ex.blocked) { blocked = true; break; }
       }
       if (delay) await sleep(delay);
     }
 
-    for (let i = 0; i < deletesArr.length; i++) {
+    let deletesOk = 0, deletesTried = 0;
+    for (let i = 0; i < deletesArr.length && !blocked && !aborted; i++) {
+      if (window.__cmWantsStop) { aborted = true; break; }
       const d = deletesArr[i];
+      deletesTried++;
       window.__cmWantsProgress = { phase: dryRun ? 'dry-delete' : 'deleting', done: editsArr.length + i, total, ok, err, currentId: d.idWant };
       try {
         if (dryRun) {
-          const probe = await fetch(`/${lang}/${game}/Wants/${d.idWantsList}`, { credentials: 'include' });
-          if (!probe.ok) throw new Error(`wantlist HTTP ${probe.status}`);
-          ok++;
+          if (await wantGone(d)) throw new Error(GONE);
         } else {
-          const fd = new FormData();
-          if (cmtkn) fd.append('__cmtkn', cmtkn);
-          fd.append('idWantsList', d.idWantsList);
-          fd.append('idWant', d.idWant);
-          const deleteUrl = `/${lang}/${game}/PostGetAction/WantsList_DeleteWant`;
-          const res = await fetch(deleteUrl, {
-            method: 'POST', credentials: 'include', body: fd,
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            redirect: 'follow',
-          });
-          if (!res.ok && res.status !== 302) throw new Error(`delete HTTP ${res.status} @ ${deleteUrl}`);
-          ok++;
+          const hadToken = !!listTokens[d.idWantsList];
+          let target = null;
+          try { target = await deleteTarget(d.idWantsList); }
+          catch (ex) { if (ex.blocked || !(await wantGone(d))) throw ex; }
+          if (target) {
+            if (!hadToken && delay) await sleep(delay);
+            sent++;
+            await post(target.action, new URLSearchParams({ __cmtkn: target.token, idWantsList: d.idWantsList, idWant: d.idWant }));
+            if (delay) await sleep(delay);
+            if (!(await wantGone(d))) throw new Error(L('Eintrag ist noch vorhanden', 'entry is still there'));
+          }
         }
+        ok++; deletesOk++;
       } catch (ex) {
         err++;
         errors.push({ idWant: d.idWant, msg: 'delete: ' + ex.message });
+        if (ex.blocked) { blocked = true; break; }
       }
       if (delay) await sleep(delay);
     }
 
-    return { ok, err, errors, langUnresolved };
+    const skipped = (editsArr.length - editsTried) + (deletesArr.length - deletesTried);
+    window.__cmWantsProgress = { phase: 'done', done: total - skipped, total, ok, err };
+    return { ok, err, errors, langUnresolved, editsOk, deletesOk, blocked, aborted, skipped, sent, total };
   } catch (topErr) {
-    return { ok: 0, err: 1, errors: [{ idWant: 'TOP', msg: topErr.message }] };
+    return { ok: 0, err: 1, errors: [{ idWant: 'TOP', msg: topErr.message }], langUnresolved: [], editsOk: 0, deletesOk: 0, blocked: false, aborted: false, skipped: 0, sent: 0, total: 0 };
   }
 }

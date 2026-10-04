@@ -204,13 +204,13 @@
     "message": "Export all wantlists"
   },
   "wants_bulk_hint": {
-    "message": "<b>Bulk-Delete + Bulk-Edit:</b> edit CSV + upload.<br><b>Editable:</b> <code>Language</code>, <code>MinCondition</code>, <code>IsFoil</code>, <code>IsSigned</code>, <code>IsAltered</code>, <code>IsPlayset</code>, <code>IsReverseHolo</code>, <code>MaxPrice_EUR</code>, <code>Quantity</code>, <code>delete</code>.<br><b>DO NOT edit:</b> all <code>_Original*</code> columns (read-only refs for skip-fetch).<br><code>delete=Y</code> → entry will be deleted. Changed fields → entry will be edited. Default: Dry-Run on."
+    "message": "<b>Bulk-Delete + Bulk-Edit:</b> edit CSV + upload.<br><b>Editable:</b> <code>Language</code> (several separated by commas, empty = any), <code>MinCondition</code>, the attribute columns (<code>IsFoil</code>, <code>IsSigned</code>, … depending on the game), <code>MaxPrice_EUR</code>, <code>Quantity</code>, <code>delete</code>.<br><b>Attributes:</b> <code>Y</code> = must be, <code>N</code> = must not be, <code>Any</code> = no preference.<br><b>DO NOT edit:</b> all <code>_Original*</code> columns, the tool uses them to detect your changes.<br><code>delete=Y</code> → entry will be deleted. Changed fields → only those are overwritten on Cardmarket, everything else stays. Default: Dry-Run on."
   },
   "label_wants_csv_select": {
     "message": "Select wants CSV (for Bulk-Delete + Bulk-Edit)"
   },
   "opt_wants_dryrun": {
-    "message": "<b>Dry-Run</b> (nothing is deleted — test only)"
+    "message": "<b>Dry-Run</b> (nothing is changed or deleted — check only)"
   },
   "btn_wants_analyze": {
     "message": "Analyze CSV + Preview"

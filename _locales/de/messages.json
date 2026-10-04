@@ -204,13 +204,13 @@
     "message": "Alle Wantlists exportieren"
   },
   "wants_bulk_hint": {
-    "message": "<b>Bulk-Delete + Bulk-Edit:</b> CSV bearbeiten + hochladen.<br><b>Editierbar:</b> <code>Language</code>, <code>MinCondition</code>, <code>IsFoil</code>, <code>IsSigned</code>, <code>IsAltered</code>, <code>IsPlayset</code>, <code>IsReverseHolo</code>, <code>MaxPrice_EUR</code>, <code>Quantity</code>, <code>delete</code>.<br><b>NICHT bearbeiten:</b> alle <code>_Original*</code>-Spalten (Read-Only Refs für Skip-Fetch).<br><code>delete=Y</code> → Eintrag wird gelöscht. Geänderte Felder → Eintrag wird editiert. Default: Dry-Run an."
+    "message": "<b>Bulk-Delete + Bulk-Edit:</b> CSV bearbeiten + hochladen.<br><b>Editierbar:</b> <code>Language</code> (mehrere mit Komma, leer = egal), <code>MinCondition</code>, die Attribut-Spalten (<code>IsFoil</code>, <code>IsSigned</code>, … je nach Spiel), <code>MaxPrice_EUR</code>, <code>Quantity</code>, <code>delete</code>.<br><b>Attribute:</b> <code>Y</code> = muss, <code>N</code> = darf nicht, <code>Any</code> = egal.<br><b>NICHT bearbeiten:</b> alle <code>_Original*</code>-Spalten, daran erkennt das Tool deine Änderungen.<br><code>delete=Y</code> → Eintrag wird gelöscht. Geänderte Felder → nur diese werden auf Cardmarket überschrieben, alles andere bleibt. Default: Dry-Run an."
   },
   "label_wants_csv_select": {
     "message": "Wants-CSV wählen (für Bulk-Delete + Bulk-Edit)"
   },
   "opt_wants_dryrun": {
-    "message": "<b>Dry-Run</b> (nichts wird gelöscht — nur testen)"
+    "message": "<b>Dry-Run</b> (nichts wird geändert oder gelöscht — nur prüfen)"
   },
   "btn_wants_analyze": {
     "message": "CSV analysieren + Preview"

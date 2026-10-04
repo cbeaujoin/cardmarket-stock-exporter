@@ -65,6 +65,7 @@ Tested on collections with **19,000+ cards**. Works reliably.
 ### 📋 Want-Lists *(new in v2.1)*
 - **Export all wantlists** — auto-discovers each list, paginates entries, outputs combined CSV with `WantListName` column
 - **Bulk-Delete via CSV** — edit CSV, set `delete=Y` on entries to remove, re-upload. Dry-Run on by default. Use case: cleaning up years of stale "still want this" entries after you've bought them.
+- **Bulk-Edit via CSV** *(rewritten in v2.4.3)* — change language, condition, attributes, max price or quantity in the CSV and re-upload. Only the fields you changed are written; everything else on the want stays as it is, and each change is read back from Cardmarket before it counts as done.
 
 ### 🔧 Quality of Life
 - 🌐 **German / English UI** *(v2.2)* — auto-detected from your browser language, plus a manual toggle (Auto / 🇩🇪 DE / 🇬🇧 EN) in the popup. Bulk-Update status messages follow the selected UI language *(v2.2.6)*.
@@ -116,11 +117,12 @@ Export metadata (timestamp, locale, game, tool version) lives in the **filename*
 | `idWant` | Cardmarket internal want-entry ID — used for bulk-delete |
 | `ProductName` | Card name |
 | `Expansion` / `ExpansionCode` | Expansion info |
-| `Language` | Preferred language |
+| `Language` | Accepted languages, comma-separated *(all of them since v2.4.3)*. Empty = any |
 | `MinCondition` | Minimum acceptable condition |
-| `IsFoil` / `IsSigned` / `IsAltered` / `IsPlayset` / `IsReverseHolo` | Variant flags (Y/N) |
-| `MaxPrice_EUR` | Your maximum buy price |
-| `Quantity` | How many you want |
+| `IsFoil` / `IsSigned` / `IsAltered` / … | Attribute requirements exactly as on the list page *(v2.4.3)*: `Y` = must be, `N` = must not be, `Any` = no preference. Which columns exist depends on the game; they are read from the page |
+| `MaxPrice_EUR` | Your maximum buy price. Empty = none |
+| `Quantity` | How many you want *(read from the page since v2.4.3)* |
+| `_Original…` | One twin per editable column. Leave them alone: Bulk-Edit compares each column with its twin to find what you changed |
 | `ProductUrl` | Direct link to the card |
 | `delete` | Default `N`. Change to `Y` and re-upload to remove that entry via Bulk-Delete. |
 
@@ -287,6 +289,14 @@ Auto-fallback is built in: any per-request error (CSRF mismatch, validation erro
 
 Same idea as Bulk-Price-Update but for wantlist entries. Export your wantlists (combined CSV with one row per entry), open in Excel, set `delete=Y` on rows you want gone, re-upload. The tool validates IDs, shows you a count, requires confirmation, then iterates each row and POSTs a remove-request to Cardmarket. Dry-Run is on by default — flip it off only after you've confirmed the count is right.
 
+### How does Want-Lists Bulk-Edit work? *(v2.4.3)*
+
+Every editable column in the export has an `_Original…` twin holding the value at export time. Change the column, leave the twin, re-upload. For each want where a column differs from its twin, the tool loads that want's edit form from Cardmarket, replaces only the changed fields, submits it, and then loads the form again to confirm the values took. Fields you did not change (other languages, printings, mail alert) are sent back exactly as Cardmarket had them. An entry is counted as OK only after that read-back; a deletion only once the entry is gone.
+
+Attribute columns take `Y` (must be), `N` (must not be) or `Any` (no preference). `Language` takes several names separated by commas, empty for any. If Cardmarket starts throttling, the run stops and tells you how many entries were left untouched. After a live run, export again before the next round — the old file no longer matches what is on Cardmarket.
+
+Before v2.4.3 an edit rewrote the whole want from the CSV row and could reset quantity, languages, attributes and the mail alert. See the changelog if you used it.
+
 ---
 
 ## 🛠️ Technical Details
@@ -375,7 +385,7 @@ If you exceed Cardmarket's rate limits, the tool auto-pauses 10 seconds and resu
 
 **Cascading Filter coverage.** v2.3.0 cascades all 17 card languages Cardmarket currently lists (1 English, 2 French, 3 German, 4 Spanish, 5 Italian, 6 Simplified Chinese, 7 Japanese, 8 Portuguese, 9 Russian, 10 Korean, 11 Traditional Chinese, 12 Dutch, 13 Polish, 14 Czech, 15 Hungarian, 16 Indonesian, 17 Thai), then subdivides further by rarity and by the variant filters of the game you are exporting. Cardmarket may add language IDs in the future; if you hit one, file an issue with the language ID from your stock URL.
 
-**Want-Lists Bulk-Delete endpoint.** Implemented based on the most likely Cardmarket pattern. If your account uses a different flow, the dry-run will succeed but live delete returns HTTP 4xx. Capture a network-trace of a manual delete and open an issue.
+**Want lists on other games.** Since v2.4.3 the want-list export, edit and delete work from Cardmarket's own forms and check every result, but the live verification was done on one game. The attribute columns are read from the page, not from a fixed list, so other games should behave the same. If an attribute column is missing from your export, the log says so; please open an issue and name the game.
 
 **Fast Mode auto-fallback.** Any per-request error in Fast Mode automatically falls back to the safe modal-flow for that one article. If you see consistently high fallback counts, switch off Fast Mode and report.
 
