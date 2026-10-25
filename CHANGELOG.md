@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), version
 
 ---
 
+## [2.4.4] - 2026-10-25
+
+### Fixed
+
+- **Fast Mode never ran; every row went through the edit dialog instead.** Reported by Maarten, who wanted to raise the prices on his Yu-Gi-Oh stock. With Fast Mode on, his log said "Bestandsmenge unbekannt" for every row, and the run stopped after the first card.
+
+  Fast Mode sends the number of copies a listing has, and it reads that number from Cardmarket's edit form. The tool looked for a text field named `editAmount`. Cardmarket renders it as a drop-down with one option per copy, the highest one preselected, so the number was never found. Fast Mode then refused the row, as it should when a value is missing, and handed it to the slower route through the edit dialog. That route has a fault of its own: after the first save, the dialog for the next card no longer opens, and every further row ends with `form-timeout-15000`.
+
+  The number is now read from the drop-down's preselected option, which is the value Cardmarket's own form would submit. If no option is preselected, the row still takes the edit-dialog route rather than guessing.
+
+  Checked live on a listing with 61 copies: price raised by one cent and set back, with quantity, condition, language, comment and flags unchanged and the listing not split.
+
+### Known issue
+
+- Without Fast Mode, the edit-dialog route still stops after the first saved card. With Fast Mode working, that route is only used for rows Fast Mode cannot handle. Use Fast Mode for bulk price updates.
+
+---
+
 ## [2.4.3] - 2026-10-04
 
 ### If you used want-list bulk edit before this version

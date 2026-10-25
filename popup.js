@@ -2153,8 +2153,12 @@ btnAnalyze.addEventListener('click', async () => {
             ['isReverseHolo', 'isFoil', 'isSigned', 'isAltered', 'isFirstEd', 'isPlayset'].forEach(n => {
               if (!(n in flags)) flags[n] = readChk(n);
             });
+            const amountSel = (form || doc).querySelector('select[name="editAmount"]');
+            const amountOpt = amountSel ? amountSel.querySelector('option[selected]') : null;
             const amountEl = (form || doc).querySelector('input[name="editAmount"], input[name="amount"]');
-            const editAmount = amountEl ? (amountEl.value || amountEl.getAttribute('value') || '') : null;
+            const editAmount = amountSel
+              ? (amountOpt ? (amountOpt.getAttribute('value') || amountOpt.textContent || '').trim() : null)
+              : (amountEl ? (amountEl.value || amountEl.getAttribute('value') || '') : null);
             return { price, comments, flags, editAmount };
           } catch (e) {
             if (e?.message === 'Session expired') throw e;
